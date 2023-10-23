@@ -51,6 +51,7 @@
 #define MAX_MARGIN_LEVELS (MAX_CLUSTERS - 1)
 
 extern bool walt_disabled;
+extern bool waltgov_disabled;
 
 enum task_event {
 	PUT_PREV_TASK	= 0,
