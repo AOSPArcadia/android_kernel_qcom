@@ -767,19 +767,30 @@ static ssize_t wcd_usbss_standby_store(struct kobject *kobj,
  */
 static int wcd_usbss_surge_kthread_fn(void *p)
 {
-	while (!kthread_should_stop()) {
-		if (wcd_usbss_ctxt_->cable_status &&
-			wcd_usbss_ctxt_->surge_enable &&
 #if 0 //OPLUS_BUG_COMPATIBILITY
+		if (wcd_usbss_ctxt_->surge_enable &&
 			wcd_usbss_is_in_reset_state())
 			wcd_usbss_reset_routine();
 #else /* OPLUS_BUG_COMPATIBILITY */
-			!wcd_usbss_ctxt_->suspended) {
-			pm_stay_awake(wcd_usbss_ctxt_->dev);
+		if (wcd_usbss_ctxt_->cable_status &&
+			wcd_usbss_ctxt_->surge_enable &&
+			!wcd_usbss_ctxt_->suspended &&
+			(acquire_runtime_env(wcd_usbss_ctxt_) >= 0)) {
 			if (wcd_usbss_is_in_reset_state()) {
+				/* Checking whether the surge occurs */
+				if (wcd_usbss_ctxt_->check_surge_workqueue) {
+					cancel_delayed_work_sync(&wcd_usbss_ctxt_->check_surge_delaywork);
+				}
 				wcd_usbss_reset_routine();
+//#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_FEEDBACK)
+				if (!(wcd_usbss_ctxt_->cable_status & (BIT(WCD_USBSS_USB)))) {
+					mm_fb_audio_kevent_named(OPLUS_AUDIO_EVENTID_HEADSET_DET, MM_FB_KEY_RATELIMIT_5MIN, \
+					"payload@@negative surge occurs, cable_status = %d", wcd_usbss_ctxt_->cable_status);
+				}
+//#endif /*CONFIG_OPLUS_FEATURE_MM_FEEDBACK*/
 			}
-			pm_relax(wcd_usbss_ctxt_->dev);
+
+			release_runtime_env(wcd_usbss_ctxt_);
 		}
 #endif /* OPLUS_BUG_COMPATIBILITY */
 		msleep_interruptible(wcd_usbss_ctxt_->surge_timer_period_ms);
