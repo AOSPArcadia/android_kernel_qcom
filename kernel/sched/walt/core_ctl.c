@@ -1212,9 +1212,6 @@ int core_ctl_set_boost(bool boost)
 	int ret = 0;
 	bool boost_state_changed = false;
 
-	if (unlikely(walt_disabled))
-		return -EAGAIN;
-
 	if (unlikely(!initialized))
 		return 0;
 
