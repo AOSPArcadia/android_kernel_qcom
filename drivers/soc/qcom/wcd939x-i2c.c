@@ -502,19 +502,20 @@ static bool wcd_usbss_is_in_reset_state(void)
 		}
 	}
 
-#if 1 //OPLUS_BUG_COMPATIBILITY
 	mutex_lock(&wcd_usbss_ctxt_->switch_update_lock);
 	if (!wcd_usbss_ctxt_->is_in_standby) {
 		/* Toggle WCD_USBSS_PMP_MISC1 bit<0>: 0 --> 1 --> 0 */
-		rc = rc | regmap_update_bits(wcd_usbss_ctxt_->regmap, WCD_USBSS_PMP_MISC1, 0x1, 0x0);
-		rc = rc | regmap_update_bits(wcd_usbss_ctxt_->regmap, WCD_USBSS_PMP_MISC1, 0x1, 0x1);
-		rc = rc | regmap_update_bits(wcd_usbss_ctxt_->regmap, WCD_USBSS_PMP_MISC1, 0x1, 0x0);
+		rc = rc | regmap_update_bits(wcd_usbss_ctxt_->regmap, WCD_USBSS_PMP_MISC1,
+				0x1, 0x0);
+		rc = rc | regmap_update_bits(wcd_usbss_ctxt_->regmap, WCD_USBSS_PMP_MISC1,
+				0x1, 0x1);
+		rc = rc | regmap_update_bits(wcd_usbss_ctxt_->regmap, WCD_USBSS_PMP_MISC1,
+				0x1, 0x0);
 
 		/* Check 3: Read WCD_USBSS_PMP_MISC2 */
 		rc = rc | regmap_read(wcd_usbss_ctxt_->regmap, WCD_USBSS_PMP_MISC2, &read_val);
 
 		if (rc != 0) {
-			dev_err(wcd_usbss_ctxt_->dev, "%s: Surge check #3 read/write reg failed\n", __func__);
 			mutex_unlock(&wcd_usbss_ctxt_->switch_update_lock);
 			goto done;
 		}
@@ -525,7 +526,6 @@ static bool wcd_usbss_is_in_reset_state(void)
 		}
 	}
 	mutex_unlock(&wcd_usbss_ctxt_->switch_update_lock);
-#endif /* OPLUS_BUG_COMPATIBILITY */
 
 done:
 #if 0 //OPLUS_BUG_COMPATIBILITY
