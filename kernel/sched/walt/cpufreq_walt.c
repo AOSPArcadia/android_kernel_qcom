@@ -514,6 +514,10 @@ static unsigned int get_next_freq(struct waltgov_policy *wg_policy,
 		freq = fmax_cap[PARTIAL_HALT_CAP][cluster->id];
 		wg_driv_cpu->reasons |= CPUFREQ_REASON_PARTIAL_HALT_CAP;
 	}
+	if (freq > fmax_cap[FREQ_REL_CAP][cluster->id]) {
+		freq = fmax_cap[FREQ_REL_CAP][cluster->id];
+		wg_driv_cpu->reasons |= CPUFREQ_REASON_FREQ_REL_CAP;
+	}
 
 	trace_waltgov_next_freq(policy->cpu, util, max, raw_freq, freq,
 				policy->min, policy->max,
