@@ -3457,14 +3457,12 @@ void dwc3_msm_notify_event(struct dwc3 *dwc,
 	case DWC3_CONTROLLER_CONNDONE_EVENT:
 		dev_dbg(mdwc->dev, "DWC3_CONTROLLER_CONNDONE_EVENT received\n");
 
-#ifdef OPLUS_FEATURE_CHG_BASIC
 		if ((dwc->speed != DWC3_DSTS_SUPERSPEED) &&
 			(dwc->speed != DWC3_DSTS_SUPERSPEED_PLUS)) {
 			reg = dwc3_msm_read_reg(mdwc->base, DWC3_GUSB3PIPECTL(0));
 			reg |= DWC3_GUSB3PIPECTL_SUSPHY;
 			dwc3_msm_write_reg(mdwc->base, DWC3_GUSB3PIPECTL(0), reg);
 		}
-#endif
 
 		/*
 		 * SW WA for CV9 RESET DEVICE TEST(TD 9.23) compliance failure.
@@ -3564,7 +3562,6 @@ void dwc3_msm_notify_event(struct dwc3 *dwc,
 	case DWC3_CONTROLLER_NOTIFY_CLEAR_DB:
 		dev_dbg(mdwc->dev, "DWC3_CONTROLLER_NOTIFY_CLEAR_DB\n");
 
-#ifdef OPLUS_FEATURE_CHG_BASIC
 		/*
 		 * Clear the susphy bit here to ensure it is not set during
 		 * the course of controller initialisation process.
@@ -3573,7 +3570,6 @@ void dwc3_msm_notify_event(struct dwc3 *dwc,
 		reg &= ~(DWC3_GUSB3PIPECTL_SUSPHY);
 		dwc3_msm_write_reg(mdwc->base, DWC3_GUSB3PIPECTL(0), reg);
 		udelay(1000);
-#endif
 
 		handle_gsi_clear_db(dwc);
 		break;
