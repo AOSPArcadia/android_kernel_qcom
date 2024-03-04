@@ -20,6 +20,7 @@
 #include <linux/clk/qcom.h>
 #include <linux/devfreq.h>
 #include <linux/cpu.h>
+#include <trace/hooks/ufshcd.h>
 #include <linux/blk-mq.h>
 #include <linux/blk_types.h>
 #include <linux/thermal.h>
@@ -112,6 +113,9 @@ enum {
 static char android_boot_dev[ANDROID_BOOT_DEV_MAX];
 
 static DEFINE_PER_CPU(struct freq_qos_request, qos_min_req);
+struct ufs_transmission_status_t ufs_transmission_status;
+struct device_attribute ufs_transmission_status_attr;
+
 /*feature-flashaging806-v001-1-begin*/
 struct unipro_signal_quality_ctrl signalCtrl;
 static const char *ufs_null_device_strs = "nullnullnullnull";//defined in scsi_alloc_sdev
@@ -197,7 +201,6 @@ static int ufs_qcom_config_shared_ice(struct ufs_qcom_host *host);
 static int ufs_qcom_ber_threshold_set(const char *val, const struct kernel_param *kp);
 static int ufs_qcom_ber_duration_set(const char *val, const struct kernel_param *kp);
 static void ufs_qcom_ber_mon_init(struct ufs_hba *hba);
-static void ufs_qcom_populate_available_cpus(struct ufs_hba *hba);
 
 static s64 idle_time[UFS_QCOM_BER_MODE_MAX];
 static ktime_t idle_start;
@@ -1567,51 +1570,6 @@ static int ufs_qcom_init_cpu_minfreq_req(struct ufs_qcom_host *host)
 	return ret;
 }
 
-/**
- * ufs_qcom_populate_available_cpus - Populate all the available cpu masks -
- * Silver, gold and gold prime.
- * @hba: per adapter instance
- */
-static void ufs_qcom_populate_available_cpus(struct ufs_hba *hba)
-{
-	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
-	int cid_cpu[MAX_NUM_CLUSTERS] = {-1, -1, -1, -1};
-	int cid = -1;
-	int prev_cid = -1;
-	int cpu = 0;
-	/*
-	 * Due to Logical contiguous CPU numbering, one to one mapping
-	 * between physical and logical cpu is no more applicable.
-	 * Hence we are not passing cpu mask from the device tree.
-	 * Hence populate the cpu mask dynamically as below.
-	 */
-	for_each_cpu(cpu, cpu_possible_mask) {
-		cid = topology_cluster_id(cpu);
-		if (cid != prev_cid) {
-			cid_cpu[cid] = cpu;
-			prev_cid = cid;
-		}
-	}
-
-	if (cid_cpu[CLUSTER_0] != -1) {
-		host->cluster_mask[CLUSTER_0].bits[0] =
-			topology_cluster_cpumask(cid_cpu[CLUSTER_0])->bits[0];
-	}
-	if (cid_cpu[CLUSTER_1] != -1) {
-		host->cluster_mask[CLUSTER_1].bits[0] =
-			topology_cluster_cpumask(cid_cpu[CLUSTER_1])->bits[0];
-	}
-	if (cid_cpu[CLUSTER_2] != -1) {
-		host->cluster_mask[CLUSTER_2].bits[0] =
-			topology_cluster_cpumask(cid_cpu[CLUSTER_2])->bits[0];
-	}
-
-	if (cid_cpu[CLUSTER_3] != -1) {
-		host->cluster_mask[CLUSTER_3].bits[0] =
-			topology_cluster_cpumask(cid_cpu[CLUSTER_3])->bits[0];
-	}
-}
-
 static void ufs_qcom_set_affinity_hint(struct ufs_hba *hba, bool prime)
 {
 	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
@@ -1637,44 +1595,30 @@ static void ufs_qcom_set_affinity_hint(struct ufs_hba *hba, bool prime)
 static void ufs_qcom_set_esi_affinity_hint(struct ufs_hba *hba)
 {
 	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
-	cpumask_t affinity_mask;
+	cpumask_t *affinity_mask = &host->esi_affinity_mask;
 	const cpumask_t *mask;
 	struct msi_desc *desc;
 	unsigned int set = IRQ_NO_BALANCING;
 	unsigned int clear = 0;
-	unsigned int num_cpu = 0;
+	unsigned int cpu = 0;
 	int ret, i = 0;
 
-	if (!(host->cluster_mask[CLUSTER_3].bits[0] || host->cluster_mask[CLUSTER_2].bits[0] ||
-			host->cluster_mask[CLUSTER_1].bits[0]))
+	if (affinity_mask->bits[0] == 0)
 		return;
 
 	ufs_qcom_msi_lock_descs(hba);
 	msi_for_each_desc(desc, hba->dev, MSI_DESC_ALL) {
-		/* Check if target has 4 cpu clusters configuration */
-		if (host->cluster_mask[CLUSTER_3].bits[0]) {
-			affinity_mask.bits[0] = host->cluster_mask[CLUSTER_2].bits[0] |
-						host->cluster_mask[CLUSTER_3].bits[0];
-		}
-
-		/* Check if the target has 3 cpu cluster configuration */
-		else if (host->cluster_mask[CLUSTER_2].bits[0])  {
-			if (cpumask_subset(get_cpu_mask(i), &host->cluster_mask[CLUSTER_1]) &&
-					(num_cpu++ <= 2))
-				affinity_mask = host->cluster_mask[CLUSTER_2];
-			else
-				affinity_mask = host->cluster_mask[CLUSTER_1];
-		}
-
+		if (i % cpumask_weight(affinity_mask) == 0)
+			cpu = cpumask_first(affinity_mask);
 		else
-			affinity_mask = host->cluster_mask[CLUSTER_1];
+			cpu = cpumask_next(cpu, affinity_mask);
 
-		mask = &affinity_mask;
+		mask = get_cpu_mask(cpu);
 		irq_modify_status(desc->irq, clear, set);
 		ret = irq_set_affinity_hint(desc->irq, mask);
 		if (ret < 0)
-			dev_err(hba->dev, "%s: Failed to set affinity hint to cpu for ESI %d, err = %d\n",
-					__func__, desc->irq, ret);
+			dev_err(hba->dev, "%s: Failed to set affinity hint to cpu %d for ESI %d, err = %d\n",
+					__func__, cpu, desc->irq, ret);
 		i++;
 	}
 	ufs_qcom_msi_unlock_descs(hba);
@@ -3619,6 +3563,15 @@ static void ufs_qcom_parse_irq_affinity(struct ufs_hba *hba)
 			dev_err(dev, "Invalid group silver mask\n");
 			host->def_mask.bits[0] = UFS_QCOM_IRQ_SLVR_MASK;
 		}
+		mask = 0;
+		of_property_read_u32(np, "qcom,esi-affinity-mask", &mask);
+		host->esi_affinity_mask.bits[0] = mask;
+		if (!cpumask_subset(&host->esi_affinity_mask,
+				    cpu_possible_mask)) {
+			dev_err(dev, "Invalid group ESI affinity mask\n");
+			host->esi_affinity_mask.bits[0] =
+					UFS_QCOM_ESI_AFFINITY_MASK;
+		}
 	}
 	/* If device includes perf mask, enable dynamic irq affinity feature */
 	if (host->perf_mask.bits[0])
@@ -3732,6 +3685,196 @@ struct thermal_cooling_device_ops ufs_thermal_ops = {
 	.get_cur_state = ufs_qcom_get_cur_therm_state,
 	.set_cur_state = ufs_qcom_set_cur_therm_state,
 };
+
+static void ufshcd_lrb_scsicmd_time_statistics(struct ufs_hba *hba, struct ufshcd_lrb *lrbp)
+{
+	if (lrbp->cmd->cmnd[0] == WRITE_10 || lrbp->cmd->cmnd[0] == WRITE_16) {
+		if (hba->pwr_info.gear_tx == 1) {
+			ufs_transmission_status.gear_min_write_sec += blk_rq_sectors(scsi_cmd_to_rq(lrbp->cmd));
+			ufs_transmission_status.gear_min_write_us +=
+				ktime_us_delta(lrbp->compl_time_stamp, lrbp->issue_time_stamp);
+		}
+
+		if (hba->pwr_info.gear_tx == 3 || hba->pwr_info.gear_tx == 4) {
+			ufs_transmission_status.gear_max_write_sec += blk_rq_sectors(scsi_cmd_to_rq(lrbp->cmd));
+			ufs_transmission_status.gear_max_write_us +=
+				ktime_us_delta(lrbp->compl_time_stamp, lrbp->issue_time_stamp);
+		}
+	} else if (lrbp->cmd->cmnd[0] == READ_10 || lrbp->cmd->cmnd[0] == READ_16) {
+		if (hba->pwr_info.gear_rx == 1) {
+			ufs_transmission_status.gear_min_read_sec += blk_rq_sectors(scsi_cmd_to_rq(lrbp->cmd));
+			ufs_transmission_status.gear_min_read_us +=
+				ktime_us_delta(lrbp->compl_time_stamp, lrbp->issue_time_stamp);
+		}
+
+		if (hba->pwr_info.gear_rx == 3 || hba->pwr_info.gear_rx == 4) {
+			ufs_transmission_status.gear_max_read_sec += blk_rq_sectors(scsi_cmd_to_rq(lrbp->cmd));
+			ufs_transmission_status.gear_max_read_us +=
+				ktime_us_delta(lrbp->compl_time_stamp, lrbp->issue_time_stamp);
+		}
+	} else {
+		if (hba->pwr_info.gear_rx == 1) {
+			ufs_transmission_status.gear_min_other_sec += blk_rq_sectors(scsi_cmd_to_rq(lrbp->cmd));
+			ufs_transmission_status.gear_min_other_us += ktime_us_delta(lrbp->compl_time_stamp, lrbp->issue_time_stamp);
+		}
+
+		if (hba->pwr_info.gear_rx == 3 || hba->pwr_info.gear_rx == 4) {
+			ufs_transmission_status.gear_max_other_sec += blk_rq_sectors(scsi_cmd_to_rq(lrbp->cmd));
+			ufs_transmission_status.gear_max_other_us += ktime_us_delta(lrbp->compl_time_stamp, lrbp->issue_time_stamp);
+		}
+	}
+
+	return;
+}
+
+static void ufshcd_lrb_devcmd_time_statistics(struct ufs_hba *hba, struct ufshcd_lrb *lrbp)
+{
+	if (hba->pwr_info.gear_tx == 1) {
+		ufs_transmission_status.gear_min_dev_us +=
+			ktime_us_delta(lrbp->compl_time_stamp, lrbp->issue_time_stamp);
+	}
+
+	if (hba->pwr_info.gear_tx == 3 || hba->pwr_info.gear_tx == 4) {
+		ufs_transmission_status.gear_max_dev_us +=
+			ktime_us_delta(lrbp->compl_time_stamp, lrbp->issue_time_stamp);
+	}
+}
+
+void ufs_send_cmd_handle(void *data, struct ufs_hba *hba, struct ufshcd_lrb *lrbp)
+{
+	if (ufs_transmission_status.transmission_status_enable) {
+		if(lrbp->cmd) {
+			ufs_transmission_status.scsi_send_count++;
+		} else {
+			ufs_transmission_status.dev_cmd_count++;
+		}
+	}
+}
+EXPORT_SYMBOL_GPL(ufs_send_cmd_handle);
+
+void ufs_compl_cmd_handle(void *data, struct ufs_hba *hba, struct ufshcd_lrb *lrbp)
+{
+	if (lrbp->cmd) {
+		if (ufs_transmission_status.transmission_status_enable) {
+			lrbp->compl_time_stamp = ktime_get();
+			ufshcd_lrb_scsicmd_time_statistics(hba, lrbp);
+		}
+	} else if (lrbp->command_type == UTP_CMD_TYPE_DEV_MANAGE ||
+			lrbp->command_type == UTP_CMD_TYPE_UFS_STORAGE) {
+		if (ufs_transmission_status.transmission_status_enable) {
+			ufshcd_lrb_devcmd_time_statistics(hba, lrbp);
+		}
+	}
+}
+EXPORT_SYMBOL_GPL(ufs_compl_cmd_handle);
+
+static int
+oplus_ufs_regist_tracepoint(void)
+{
+	int rc;
+	printk("oplus ufs trace point init");
+	rc = register_trace_android_vh_ufs_send_command(ufs_send_cmd_handle, NULL);
+	if (rc != 0)
+		pr_err("register_trace_android_vh_ufs_send_command failed! rc=%d\n", rc);
+
+	rc = register_trace_android_vh_ufs_compl_command(ufs_compl_cmd_handle, NULL);
+	if (rc != 0)
+		pr_err("register_trace_android_vh_ufs_compl_command failed! rc=%d\n", rc);
+
+	return rc;
+}
+
+static ssize_t ufshcd_transmission_status_data_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE,
+					"transmission_status_enable:%u\n"
+					"gear_min_write_sec:%llu\n"
+					"gear_max_write_sec:%llu\n"
+					"gear_min_read_sec:%llu\n"
+					"gear_max_read_sec:%llu\n"
+					"gear_min_write_us:%llu\n"
+					"gear_max_write_us:%llu\n"
+					"gear_min_read_us:%llu\n"
+					"gear_max_read_us:%llu\n"
+					"gear_min_dev_us:%llu\n"
+					"gear_max_dev_us:%llu\n"
+					"gear_min_other_sec:%llu\n"
+					"gear_max_other_sec:%llu\n"
+					"gear_min_other_us:%llu\n"
+					"gear_max_other_us:%llu\n"
+					"scsi_send_count:%llu\n"
+					"dev_cmd_count:%llu\n"
+					"active_count:%llu\n"
+					"active_time:%llu\n"
+					"sleep_count:%llu\n"
+					"sleep_time:%llu\n"
+					"powerdown_count:%llu\n"
+					"powerdown_time:%llu\n"
+					"power_total_count:%llu\n"
+					"current_pwr_mode:%u\n",
+					ufs_transmission_status.transmission_status_enable,
+					ufs_transmission_status.gear_min_write_sec,
+					ufs_transmission_status.gear_max_write_sec,
+					ufs_transmission_status.gear_min_read_sec,
+					ufs_transmission_status.gear_max_read_sec,
+					ufs_transmission_status.gear_min_write_us,
+					ufs_transmission_status.gear_max_write_us,
+					ufs_transmission_status.gear_min_read_us,
+					ufs_transmission_status.gear_max_read_us,
+					ufs_transmission_status.gear_min_dev_us,
+					ufs_transmission_status.gear_max_dev_us,
+					ufs_transmission_status.gear_min_other_sec,
+					ufs_transmission_status.gear_max_other_sec,
+					ufs_transmission_status.gear_min_other_us,
+					ufs_transmission_status.gear_max_other_us,
+					ufs_transmission_status.scsi_send_count,
+					ufs_transmission_status.dev_cmd_count,
+					ufs_transmission_status.active_count,
+					ufs_transmission_status.active_time,
+					ufs_transmission_status.sleep_count,
+					ufs_transmission_status.sleep_time,
+					ufs_transmission_status.powerdown_count,
+					ufs_transmission_status.powerdown_time,
+					ufs_transmission_status.power_total_count,
+					ufs_transmission_status.current_pwr_mode);
+}
+
+static ssize_t ufshcd_transmission_status_data_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	u32 value;
+
+	if (kstrtou32(buf, 0, &value))
+		return -EINVAL;
+
+	value = !!value;
+
+	if (value) {
+		ufs_transmission_status.transmission_status_enable = 1;
+	} else {
+		ufs_transmission_status.transmission_status_enable = 0;
+		memset(&ufs_transmission_status, 0, sizeof(struct ufs_transmission_status_t));
+	}
+
+	return count;
+}
+
+static void ufshcd_transmission_status_init_sysfs(struct ufs_hba *hba)
+{
+	printk("tianwen: ufshcd_transmission_status_init_sysfs start\n");
+	ufs_transmission_status_attr.show = ufshcd_transmission_status_data_show;
+	ufs_transmission_status_attr.store = ufshcd_transmission_status_data_store;
+	sysfs_attr_init(&ufs_transmission_status_attr.attr);
+	ufs_transmission_status_attr.attr.name = "ufs_transmission_status";
+	ufs_transmission_status_attr.attr.mode = 0644;
+	if (device_create_file(hba->dev, &ufs_transmission_status_attr))
+		dev_err(hba->dev, "Failed to create sysfs for ufs_transmission_status_attr\n");
+
+	/*init the struct ufs_transmission_status*/
+	memset(&ufs_transmission_status, 0, sizeof(struct ufs_transmission_status_t));
+	ufs_transmission_status.transmission_status_enable = 1;
+}
 
 /* Static Algorithm */
 static int ufs_qcom_config_alg1(struct ufs_hba *hba)
@@ -3942,30 +4085,6 @@ static void ufs_qcom_setup_max_hs_gear(struct ufs_qcom_host *host)
 
 //#ifdef OPLUS_UFS_SIGNAL_QUALITY
 /*feature-flashaging806-v001-2-begin*/
-static void recordTimeStamp(
-	struct signal_quality *record,
-	enum ufs_event_type type
-) {
-	ktime_t cur_time = ktime_get();
-	switch (type)
-	{
-	case UFS_EVT_PA_ERR:
-	case UFS_EVT_DL_ERR:
-	case UFS_EVT_NL_ERR:
-	case UFS_EVT_TL_ERR:
-	case UFS_EVT_DME_ERR:
-		if (STAMP_RECORD_MAX <= record->stamp_pos)
-			return;
-		if (0 == record->stamp_pos)
-			record->stamp[0] = cur_time;
-		else if (cur_time > (record->stamp[record->stamp_pos - 1] +
-				STAMP_MIN_INTERVAL))
-			record->stamp[record->stamp_pos++] = cur_time;
-		return;
-	default:
-		return;
-	}
-}
 
 void recordUniproErr(
 	struct unipro_signal_quality_ctrl *signalCtrl,
@@ -3975,7 +4094,6 @@ void recordUniproErr(
 	unsigned long err_bits;
 	int ec;
 	struct signal_quality *rec = &signalCtrl->record;
-	recordTimeStamp(rec, type);
 	switch (type)
 	{
 	case UFS_EVT_FATAL_ERR:
@@ -4043,8 +4161,8 @@ void recordUniproErr(
 	seq_printf(s, #x"\t%d\n", signalCtrl->record.unipro_TL_err_cnt[x])
 #define SEQ_DME_PRINT(x)    \
 	seq_printf(s, #x"\t%d\n", signalCtrl->record.unipro_DME_err_cnt[x])
-#define SEQ_STAMP_PRINT(x)  \
-	seq_printf(s, #x"\t%d\n", signalCtrl->record.stamp[x])
+#define SEQ_GEAR_PRINT(x)  \
+	seq_printf(s, #x"\t%d\n", signalCtrl->record.gear_err_cnt[x])
 
 static int record_read_func(struct seq_file *s, void *v)
 {
@@ -4097,16 +4215,11 @@ static int record_read_func(struct seq_file *s, void *v)
 	SEQ_DME_PRINT(UNIPRO_DME_TX_QOS);
 	SEQ_DME_PRINT(UNIPRO_DME_RX_QOS);
 	SEQ_DME_PRINT(UNIPRO_DME_PA_INIT_QOS);
-	SEQ_STAMP_PRINT(UNIPRO_0_STAMP);
-	SEQ_STAMP_PRINT(UNIPRO_1_STAMP);
-	SEQ_STAMP_PRINT(UNIPRO_2_STAMP);
-	SEQ_STAMP_PRINT(UNIPRO_3_STAMP);
-	SEQ_STAMP_PRINT(UNIPRO_4_STAMP);
-	SEQ_STAMP_PRINT(UNIPRO_5_STAMP);
-	SEQ_STAMP_PRINT(UNIPRO_6_STAMP);
-	SEQ_STAMP_PRINT(UNIPRO_7_STAMP);
-	SEQ_STAMP_PRINT(UNIPRO_8_STAMP);
-	SEQ_STAMP_PRINT(UNIPRO_9_STAMP);
+	SEQ_GEAR_PRINT(UFS_HS_G1);
+	SEQ_GEAR_PRINT(UFS_HS_G2);
+	SEQ_GEAR_PRINT(UFS_HS_G3);
+	SEQ_GEAR_PRINT(UFS_HS_G4);
+	SEQ_GEAR_PRINT(UFS_HS_G5);
 	return 0;
 }
 
@@ -4127,13 +4240,38 @@ static const struct proc_ops record_fops = {
 };
 
 #define SEQ_UPLOAD_PRINT(x) \
-	seq_printf(s, #x": %d\n", signalCtrl->record.x \
-		-signalCtrl->record_upload.x);\
-	signalCtrl->record_upload.x = signalCtrl->record.x;
-#define SEQ_UPLOAD_STAMP_PRINT(x) \
-	seq_printf(s, #x": %d\n", signalCtrl->record.stamp[x] \
-		-signalCtrl->record_upload.stamp[x]);\
-	signalCtrl->record_upload.stamp[x] = signalCtrl->record.stamp[x];
+		seq_printf(s, #x": %d\n", signalCtrl->record.x \
+			-signalCtrl->record_upload.x);\
+		signalCtrl->record_upload.x = signalCtrl->record.x;
+#define SEQ_PA_UPLOAD_PRINT(x) \
+		seq_printf(s, #x": %d\n", signalCtrl->record.unipro_PA_err_cnt[x] \
+			-signalCtrl->record_upload.unipro_PA_err_cnt[x]);\
+		signalCtrl->record_upload.unipro_PA_err_cnt[x] = signalCtrl->record.unipro_PA_err_cnt[x];
+#define SEQ_DL_UPLOAD_PRINT(x) \
+			seq_printf(s, #x": %d\n", signalCtrl->record.unipro_DL_err_cnt[x] \
+				-signalCtrl->record_upload.unipro_DL_err_cnt[x]);\
+			signalCtrl->record_upload.unipro_DL_err_cnt[x] = signalCtrl->record.unipro_DL_err_cnt[x];
+#define SEQ_DL_UPLOAD_PRINT(x) \
+				seq_printf(s, #x": %d\n", signalCtrl->record.unipro_DL_err_cnt[x] \
+					-signalCtrl->record_upload.unipro_DL_err_cnt[x]);\
+				signalCtrl->record_upload.unipro_DL_err_cnt[x] = signalCtrl->record.unipro_DL_err_cnt[x];
+#define SEQ_NL_UPLOAD_PRINT(x) \
+					seq_printf(s, #x": %d\n", signalCtrl->record.unipro_NL_err_cnt[x] \
+						-signalCtrl->record_upload.unipro_NL_err_cnt[x]);\
+					signalCtrl->record_upload.unipro_NL_err_cnt[x] = signalCtrl->record.unipro_NL_err_cnt[x];
+#define SEQ_TL_UPLOAD_PRINT(x) \
+						seq_printf(s, #x": %d\n", signalCtrl->record.unipro_TL_err_cnt[x] \
+							-signalCtrl->record_upload.unipro_TL_err_cnt[x]);\
+						signalCtrl->record_upload.unipro_TL_err_cnt[x] = signalCtrl->record.unipro_TL_err_cnt[x];
+#define SEQ_DME_UPLOAD_PRINT(x) \
+							seq_printf(s, #x": %d\n", signalCtrl->record.unipro_DME_err_cnt[x] \
+								-signalCtrl->record_upload.unipro_DME_err_cnt[x]);\
+							signalCtrl->record_upload.unipro_DME_err_cnt[x] = signalCtrl->record.unipro_DME_err_cnt[x];
+#define SEQ_GEAR_UPLOAD_PRINT(x) \
+							seq_printf(s, #x": %d\n", signalCtrl->record.gear_err_cnt[x] \
+								-signalCtrl->record_upload.gear_err_cnt[x]);\
+							signalCtrl->record_upload.gear_err_cnt[x] = signalCtrl->record.gear_err_cnt[x];
+
 static int record_upload_read_func(struct seq_file *s, void *v)
 {
 	struct unipro_signal_quality_ctrl *signalCtrl =
@@ -4150,7 +4288,52 @@ static int record_upload_read_func(struct seq_file *s, void *v)
 	SEQ_UPLOAD_PRINT(unipro_NL_err_total_cnt);
 	SEQ_UPLOAD_PRINT(unipro_TL_err_total_cnt);
 	SEQ_UPLOAD_PRINT(unipro_DME_err_total_cnt);
-	SEQ_UPLOAD_STAMP_PRINT(UNIPRO_0_STAMP);
+
+	SEQ_PA_UPLOAD_PRINT(UNIPRO_PA_LANE0_ERR_CNT);
+	SEQ_PA_UPLOAD_PRINT(UNIPRO_PA_LANE1_ERR_CNT);
+	SEQ_PA_UPLOAD_PRINT(UNIPRO_PA_LANE2_ERR_CNT);
+	SEQ_PA_UPLOAD_PRINT(UNIPRO_PA_LANE3_ERR_CNT);
+	SEQ_PA_UPLOAD_PRINT(UNIPRO_PA_LINE_RESET);
+
+	SEQ_DL_UPLOAD_PRINT(UNIPRO_DL_NAC_RECEIVED);
+	SEQ_DL_UPLOAD_PRINT(UNIPRO_DL_TCX_REPLAY_TIMER_EXPIRED);
+	SEQ_DL_UPLOAD_PRINT(UNIPRO_DL_AFCX_REQUEST_TIMER_EXPIRED);
+	SEQ_DL_UPLOAD_PRINT(UNIPRO_DL_FCX_PROTECTION_TIMER_EXPIRED);
+	SEQ_DL_UPLOAD_PRINT(UNIPRO_DL_CRC_ERROR);
+	SEQ_DL_UPLOAD_PRINT(UNIPRO_DL_RX_BUFFER_OVERFLOW);
+	SEQ_DL_UPLOAD_PRINT(UNIPRO_DL_MAX_FRAME_LENGTH_EXCEEDED);
+	SEQ_DL_UPLOAD_PRINT(UNIPRO_DL_WRONG_SEQUENCE_NUMBER);
+	SEQ_DL_UPLOAD_PRINT(UNIPRO_DL_AFC_FRAME_SYNTAX_ERROR);
+	SEQ_DL_UPLOAD_PRINT(UNIPRO_DL_NAC_FRAME_SYNTAX_ERROR);
+	SEQ_DL_UPLOAD_PRINT(UNIPRO_DL_EOF_SYNTAX_ERROR);
+	SEQ_DL_UPLOAD_PRINT(UNIPRO_DL_FRAME_SYNTAX_ERROR);
+	SEQ_DL_UPLOAD_PRINT(UNIPRO_DL_BAD_CTRL_SYMBOL_TYPE);
+	SEQ_DL_UPLOAD_PRINT(UNIPRO_DL_PA_INIT_ERROR);
+	SEQ_DL_UPLOAD_PRINT(UNIPRO_DL_PA_ERROR_IND_RECEIVED);
+	SEQ_DL_UPLOAD_PRINT(UNIPRO_DL_PA_INIT);
+
+	SEQ_NL_UPLOAD_PRINT(UNIPRO_NL_UNSUPPORTED_HEADER_TYPE);
+	SEQ_NL_UPLOAD_PRINT(UNIPRO_NL_BAD_DEVICEID_ENC);
+	SEQ_NL_UPLOAD_PRINT(UNIPRO_NL_LHDR_TRAP_PACKET_DROPPING);
+
+	SEQ_TL_UPLOAD_PRINT(UNIPRO_TL_UNSUPPORTED_HEADER_TYPE);
+	SEQ_TL_UPLOAD_PRINT(UNIPRO_TL_UNKNOWN_CPORTID);
+	SEQ_TL_UPLOAD_PRINT(UNIPRO_TL_NO_CONNECTION_RX);
+	SEQ_TL_UPLOAD_PRINT(UNIPRO_TL_CONTROLLED_SEGMENT_DROPPING);
+	SEQ_TL_UPLOAD_PRINT(UNIPRO_TL_BAD_TC);
+	SEQ_TL_UPLOAD_PRINT(UNIPRO_TL_E2E_CREDIT_OVERFLOW);
+	SEQ_TL_UPLOAD_PRINT(UNIPRO_TL_SAFETY_VALVE_DROPPING);
+
+	SEQ_DME_UPLOAD_PRINT(UNIPRO_DME_GENERIC);
+	SEQ_DME_UPLOAD_PRINT(UNIPRO_DME_TX_QOS);
+	SEQ_DME_UPLOAD_PRINT(UNIPRO_DME_RX_QOS);
+	SEQ_DME_UPLOAD_PRINT(UNIPRO_DME_PA_INIT_QOS);
+
+	SEQ_GEAR_UPLOAD_PRINT(UFS_HS_G1);
+	SEQ_GEAR_UPLOAD_PRINT(UFS_HS_G2);
+	SEQ_GEAR_UPLOAD_PRINT(UFS_HS_G3);
+	SEQ_GEAR_UPLOAD_PRINT(UFS_HS_G4);
+	SEQ_GEAR_UPLOAD_PRINT(UFS_HS_G5);
 	return 0;
 }
 
@@ -4283,7 +4466,7 @@ static void ufs_qcom_parse_pbl_rst_workaround_flag(struct ufs_qcom_host *host)
 static void ufs_qcom_parse_broken_ahit_workaround_flag(struct ufs_qcom_host *host)
 {
 	struct device_node *np = host->hba->dev->of_node;
-	const char *str  = "qcom,broken-ahit-wa";
+	const char *str = "qcom,broken-ahit-wa";
 
 	if (!np)
 		return;
@@ -4355,19 +4538,6 @@ cell_put:
 	nvmem_cell_put(nvmem_cell);
 }
 
-static int ufs_qcom_get_host_id(struct ufs_hba *hba)
-{
-	int host_id;
-
-	host_id = of_alias_get_id(hba->dev->of_node, "ufshc");
-	if ((host_id < 0) || (host_id > MAX_UFS_QCOM_HOSTS)) {
-		dev_err(hba->dev, "Failed to get host index %d\n", host_id);
-		host_id = 1;
-	}
-
-	return host_id;
-}
-
 /**
  * ufs_qcom_init - bind phy with controller
  * @hba: host controller instance
@@ -4380,8 +4550,7 @@ static int ufs_qcom_get_host_id(struct ufs_hba *hba)
  */
 static int ufs_qcom_init(struct ufs_hba *hba)
 {
-	char type[5];
-	int err, host_id;
+	int err;
 	struct device *dev = hba->dev;
 	struct ufs_qcom_host *host;
 	struct ufs_qcom_thermal *ut;
@@ -4454,13 +4623,9 @@ static int ufs_qcom_init(struct ufs_hba *hba)
 					 &host->vdd_hba_reg_nb);
 
 	/* update phy revision information before calling phy_init() */
+
 	ufs_qcom_phy_save_controller_version(host->generic_phy,
 		host->hw_ver.major, host->hw_ver.minor, host->hw_ver.step);
-	if (err == -EPROBE_DEFER) {
-		pr_err("%s: phy device probe is not completed yet\n",
-		__func__);
-		goto out_variant_clear;
-	}
 
 	err = ufs_qcom_parse_reg_info(host, "qcom,vddp-ref-clk",
 				      &host->vddp_ref_clk);
@@ -4550,7 +4715,9 @@ static int ufs_qcom_init(struct ufs_hba *hba)
 				__func__, err);
 
 	ufs_qcom_init_sysfs(hba);
-	/*feature-flashaging806-v001-3-begin*/
+	oplus_ufs_regist_tracepoint();
+	ufshcd_transmission_status_init_sysfs(hba);
+        /*feature-flashaging806-v001-3-begin*/
 	create_signal_quality_proc(&signalCtrl);
     /*feature-flashaging806-v001-3-end*/
 	/* Provide SCSI host ioctl API */
@@ -4562,16 +4729,9 @@ static int ufs_qcom_init(struct ufs_hba *hba)
 					  void __user *))ufs_qcom_ioctl;
 #endif
 
-	/*
-	 * Based on host_id, pass the appropriate device type
-	 * to register thermal cooling device.
-	 */
-	host_id = ufs_qcom_get_host_id(hba);
-	snprintf(type, sizeof(type), "ufs%d", host_id);
-
 	ut->tcd = devm_thermal_of_cooling_device_register(dev,
 							  dev->of_node,
-							  type,
+							  "ufs",
 							  dev,
 							  &ufs_thermal_ops);
 	if (IS_ERR(ut->tcd))
@@ -4582,7 +4742,6 @@ static int ufs_qcom_init(struct ufs_hba *hba)
 
 	ufs_qcom_save_host_ptr(hba);
 
-	ufs_qcom_populate_available_cpus(hba);
 	ufs_qcom_qos_init(hba);
 	ufs_qcom_parse_irq_affinity(hba);
 	ufs_qcom_ber_mon_init(hba);
@@ -5035,6 +5194,17 @@ static void ufs_qcom_save_all_regs(struct ufs_qcom_host *host)
 	ufs_qcom_phy_dbg_register_save(phy);
 }
 
+void recordGearErr(struct unipro_signal_quality_ctrl *signalCtrl, struct ufs_hba *hba)
+{
+	struct ufs_pa_layer_attr *pwr_info = &hba->pwr_info;
+	u32 dev_gear = min_t(u32, pwr_info->gear_rx, pwr_info->gear_tx);
+
+	if (dev_gear > UFS_HS_G4)
+		return;
+
+	signalCtrl->record.gear_err_cnt[dev_gear]++;
+}
+
 static void ufs_qcom_event_notify(struct ufs_hba *hba,
 								  enum ufs_event_type evt,
 								  void *data)
@@ -5044,6 +5214,7 @@ static void ufs_qcom_event_notify(struct ufs_hba *hba,
 	bool ber_th_exceeded = false;
 	u32 reg = *(u32 *)data;
 	recordUniproErr(&signalCtrl, reg, evt);
+	recordGearErr(&signalCtrl, hba);
 
 	switch (evt) {
 	case UFS_EVT_PA_ERR:
@@ -6685,7 +6856,7 @@ static int ufs_qcom_remove(struct platform_device *pdev)
 
 /**
  * ufs_qcom_enable_vccq_shutdown - read from DTS whether vccq_shutdown
- * should be enabled for puting additional vote on VCCQ LDO during shutdown.
+ * should be enabled for putting additional vote on VCCQ LDO during shutdown.
  * @hba: per adapter instance
  */
 
