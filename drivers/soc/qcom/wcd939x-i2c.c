@@ -13,9 +13,9 @@
 #include <linux/pm_runtime.h>
 #include <linux/nvmem-consumer.h>
 #include "wcd-usbss-priv.h"
+#include "wcd-usbss-registers.h"
 #include "wcd-usbss-reg-masks.h"
 #include "wcd-usbss-reg-shifts.h"
-
 #define WCD_USBSS_I2C_NAME	"wcd-usbss-i2c-driver"
 
 #define DEFAULT_SURGE_TIMER_PERIOD_MS 15000
@@ -57,6 +57,10 @@ static const char * const supply_names[] = {
 };
 
 static int audio_fsm_mode = WCD_USBSS_AUDIO_MANUAL;
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+unsigned char wcd_usbss_equalizer1 = 0;
+#endif
 
 /* Linearlizer coefficients for 32ohm load */
 static const struct wcd_usbss_reg_mask_val coeff_init[] = {
@@ -329,19 +333,6 @@ int wcd_usbss_set_linearizer_sw_tap(uint32_t aud_tap, uint32_t gnd_tap)
 	return ret;
 }
 EXPORT_SYMBOL(wcd_usbss_set_linearizer_sw_tap);
-
-static bool wcd_usbss_readable_register(struct device *dev, unsigned int reg)
-{
-	if (reg <= (WCD_USBSS_BASE + 1))
-		return false;
-
-	if ((wcd_usbss_ctxt_ && wcd_usbss_ctxt_->version == WCD_USBSS_1_X) &&
-			(reg >= WCD_USBSS_EFUSE_CTL &&
-			reg <= WCD_USBSS_ANA_CSR_DBG_CTL))
-		return false;
-
-	return wcd_usbss_reg_access[WCD_USBSS_REG(reg)] & RD_REG;
-}
 
 /*
  * wcd_usbss_register_update() - Write or read multiple USB-SS registers.
@@ -1002,6 +993,17 @@ int wcd_usbss_dpdm_switch_update(bool sw_en, bool eq_en)
 	if (ret)
 		pr_err("%s(): Failed to write equalizer1_en ret:%d\n", __func__, ret);
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	/* 8 is the default value. you can change as what you want to set like x.
+	 * x << 3, the x is the decimal value you want to write.
+	 */
+	if (eq_en && wcd_usbss_equalizer1) {
+		ret = regmap_update_bits(wcd_usbss_ctxt_->regmap, WCD_USBSS_EQUALIZER1,
+				WCD_USBSS_EQUALIZER1_BW_SETTINGS_MASK, wcd_usbss_equalizer1 << 3);
+		pr_err("%s(): write wcd_usbss_equalizer1:%d", __func__, wcd_usbss_equalizer1);
+	}
+#endif
+
 	release_runtime_env(wcd_usbss_ctxt_);
 
 	return ret;
@@ -1105,6 +1107,9 @@ int wcd_usbss_switch_update(enum wcd_usbss_cable_types ctype,
 {
 	int i = 0, ret = 0;
 	bool audio_switch = false;
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	unsigned int debug_buf[9] = {0};
+#endif
 
 	/* check if driver is probed and private context is init'ed */
 	if (wcd_usbss_ctxt_ == NULL)
@@ -1356,6 +1361,36 @@ int wcd_usbss_switch_update(enum wcd_usbss_cable_types ctype,
 					status_to_str(wcd_usbss_ctxt_->wcd_standby_status));
 		}
 	}
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	for (i = 0; i < 8; ++i) {
+		ret = regmap_read(wcd_usbss_ctxt_->regmap, 0x400 + i, &debug_buf[i]);
+		if (ret != 0) {
+			printk(KERN_ERR "0x%x: read error, ", 0x400 + i);
+			debug_buf[i] = 0xffff;
+		}
+	}
+	printk(KERN_ERR "WCD switch registers[0x400~0x407]:0x%x, 0x%x, 0x%x, 0x%x, 0x%x, 0x%x, 0x%x, 0x%x", debug_buf[0],
+		debug_buf[1],debug_buf[2], debug_buf[3], debug_buf[4], debug_buf[5], debug_buf[6], debug_buf[7]);
+	for (i = 0; i < 8; ++i) {
+		ret = regmap_read(wcd_usbss_ctxt_->regmap, 0x408 + i, &debug_buf[i]);
+		if (ret != 0) {
+			printk(KERN_ERR "0x%x: read error, ", 0x408 + i);
+			debug_buf[i] = 0xffff;
+		}
+	}
+	printk(KERN_ERR "WCD switch registers[0x408~0x40f]:0x%x, 0x%x, 0x%x, 0x%x, 0x%x, 0x%x, 0x%x, 0x%x", debug_buf[0],
+		debug_buf[1],debug_buf[2], debug_buf[3], debug_buf[4], debug_buf[5], debug_buf[6], debug_buf[7]);
+	for (i = 0; i < 9; ++i) {
+		ret = regmap_read(wcd_usbss_ctxt_->regmap, 0x410 + i, &debug_buf[i]);
+		if (ret != 0) {
+			printk(KERN_ERR "0x%x: read error, ", 0x410 + i);
+			debug_buf[i] = 0xffff;
+		}
+	}
+	printk(KERN_ERR "WCD switch registers[0x410~0x419]:0x%x, 0x%x, 0x%x, 0x%x, 0x%x, 0x%x, 0x%x, 0x%x, 0x%x", debug_buf[0],
+		debug_buf[1],debug_buf[2], debug_buf[3], debug_buf[4], debug_buf[5], debug_buf[6], debug_buf[7], debug_buf[8]);
+#endif
 
 	release_runtime_env(wcd_usbss_ctxt_);
 
@@ -1707,13 +1742,17 @@ static int wcd_usbss_probe(struct i2c_client *i2c)
 		goto err_data;
 	}
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	device_property_read_u8(priv->dev, "qcom,wcd_usbss_equalizer1", &wcd_usbss_equalizer1);
+	dev_err(priv->dev, "wcd_usbss_equalizer1 configuration is 0x%x\n", wcd_usbss_equalizer1);
+#endif
+
 	rc = wcd_usbss_init_optional_reset_pins(priv);
 	if (rc) {
 		dev_dbg(priv->dev, "%s: Optional reset pin reset failed\n",
 				__func__);
 		rc = 0;
 	}
-	wcd_usbss_regmap_config.readable_reg = wcd_usbss_readable_register;
 	priv->regmap = wcd_usbss_regmap_init(priv->dev, &wcd_usbss_regmap_config);
 	if (IS_ERR_OR_NULL(priv->regmap)) {
 		rc = PTR_ERR(priv->regmap);
