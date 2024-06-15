@@ -466,7 +466,6 @@ int rpmh_flush(struct rpmh_ctrlr *ctrlr, int ch)
 	spin_lock_irqsave(&ctrlr->cache_lock, flags);
 	ret = _rpmh_flush(ctrlr, ch);
 	spin_unlock_irqrestore(&ctrlr->cache_lock, flags);
-
 	return ret;
 }
 
@@ -485,14 +484,23 @@ int rpmh_write_sleep_and_wake(const struct device *dev)
 	int ch, ret;
 
 	ch = rpmh_rsc_get_channel(ctrlr_to_drv(ctrlr));
-	if (ch < 0)
+	if (ch < 0) {
+		rpmh_rsc_debug_channel_busy(ctrlr_to_drv(ctrlr));
+		BUG_ON(1);
 		return ch;
+	}
 
 	ret = rpmh_flush(ctrlr, ch);
 	if (ret || !(ctrlr->flags & HW_CHANNEL_PRESENT))
 		return ret;
 
-	return rpmh_rsc_switch_channel(ctrlr_to_drv(ctrlr), ch);
+	ret = rpmh_rsc_switch_channel(ctrlr_to_drv(ctrlr), ch);
+	if (ret) {
+		rpmh_rsc_debug_channel_busy(ctrlr_to_drv(ctrlr));
+		BUG_ON(1);
+	}
+
+	return ret;
 }
 EXPORT_SYMBOL(rpmh_write_sleep_and_wake);
 
@@ -708,7 +716,6 @@ int rpmh_drv_start(const struct device *dev)
 {
 	struct rpmh_ctrlr *ctrlr = get_rpmh_ctrlr_no_child(dev);
 	int ret;
-
 	if (rpmh_standalone)
 		return 0;
 
@@ -735,10 +742,8 @@ int rpmh_drv_stop(const struct device *dev)
 {
 	struct rpmh_ctrlr *ctrlr = get_rpmh_ctrlr_no_child(dev);
 	int ret;
-
 	if (rpmh_standalone)
 		return 0;
-
 	ret = rpmh_rsc_drv_enable(ctrlr_to_drv(ctrlr), false);
 	if (ret) {
 		rpmh_rsc_debug_channel_busy(ctrlr_to_drv(ctrlr));

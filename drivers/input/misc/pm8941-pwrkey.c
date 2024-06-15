@@ -350,7 +350,7 @@ static int pm8941_pwrkey_probe(struct platform_device *pdev)
 	struct device *parent;
 	struct device_node *regmap_node;
 	const __be32 *addr;
-	u32 req_delay;
+	u32 req_delay, mask, delay_shift;
 	unsigned int sts;
 	int error;
 
@@ -445,6 +445,18 @@ static int pm8941_pwrkey_probe(struct platform_device *pdev)
 
 	pwrkey->input->name = pwrkey->data->name;
 	pwrkey->input->phys = pwrkey->data->phys;
+
+	if (pwrkey->data->supports_debounce_config) {
+		if (pwrkey->subtype >= PON_SUBTYPE_GEN2_PRIMARY) {
+			mask = PON_DBC_DELAY_MASK_GEN2;
+			delay_shift = PON_DBC_SHIFT_GEN2;
+		} else {
+			mask = PON_DBC_DELAY_MASK_GEN1;
+			delay_shift = PON_DBC_SHIFT_GEN1;
+		}
+
+		req_delay = (req_delay << delay_shift) / USEC_PER_SEC;
+		req_delay = ilog2(req_delay);
 
 	error = pm8941_pwrkey_hw_init(pwrkey);
 	if (error) {
