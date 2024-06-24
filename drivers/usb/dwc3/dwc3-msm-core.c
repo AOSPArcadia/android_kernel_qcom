@@ -6860,7 +6860,7 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 	int ret = 0;
 	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
 	u32 reg;
-
+/*
 #ifdef OPLUS_FEATURE_CHG_BASIC
 	u32 val;
 #endif
@@ -6868,7 +6868,7 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 #ifdef OPLUS_FEATURE_CHG_BASIC
 	dev_err(mdwc->dev, "%s: turn %s host\n", __func__, on ? "on" : "off");
 #endif
-
+*/
 	if (on) {
 		dev_dbg(mdwc->dev, "%s: turn on host\n", __func__);
 		mdwc->hs_phy->flags |= PHY_HOST_MODE;
