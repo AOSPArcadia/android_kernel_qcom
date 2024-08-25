@@ -204,13 +204,6 @@ enum wcd_usbss_sbu_switch_orientation wcd_usbss_get_sbu_switch_orientation(void)
 		return ret;
 	}
 
-	ret = pm_runtime_resume_and_get(wcd_usbss_ctxt_->dev);
-	if (ret < 0) {
-		dev_err(wcd_usbss_ctxt_->dev, "%s: pm_runtime_resume_and_get failed: %i\n",
-			__func__, ret);
-		return ret;
-	}
-
 	regmap_read(wcd_usbss_ctxt_->regmap, WCD_USBSS_SWITCH_SELECT0, &read_val);
 	pm_runtime_mark_last_busy(wcd_usbss_ctxt_->dev);
 	pm_runtime_put_autosuspend(wcd_usbss_ctxt_->dev);
@@ -247,7 +240,11 @@ int wcd_usbss_set_switch_settings_enable(enum wcd_usbss_switch_type switch_type,
 	    (switch_state != USBSS_SWITCH_DISABLE && switch_state != USBSS_SWITCH_ENABLE))
 		return -EINVAL;
 
+#if 0 //OPLUS_BUG_COMPATIBILITY
 	ret = pm_runtime_resume_and_get(wcd_usbss_ctxt_->dev);
+#else /* OPLUS_BUG_COMPATIBILITY */
+	ret = wcd_usbss_pm_runtime_resume_and_wait(wcd_usbss_ctxt_->dev);
+#endif /* OPLUS_BUG_COMPATIBILITY */
 	if (ret < 0) {
 		dev_err(wcd_usbss_ctxt_->dev, "%s: pm_runtime_resume_and_get failed: %i\n",
 					__func__, ret);
@@ -284,7 +281,11 @@ int wcd_usbss_linearizer_rdac_cal_code_select(enum linearizer_rdac_cal_code_sele
 					   source != LINEARIZER_SOURCE_SW))
 		return -EINVAL;
 
+#if 0 //OPLUS_BUG_COMPATIBILITY
 	ret = pm_runtime_resume_and_get(wcd_usbss_ctxt_->dev);
+#else /* OPLUS_BUG_COMPATIBILITY */
+	ret = wcd_usbss_pm_runtime_resume_and_wait(wcd_usbss_ctxt_->dev);
+#endif /* OPLUS_BUG_COMPATIBILITY */
 	if (ret < 0) {
 		dev_err(wcd_usbss_ctxt_->dev, "%s: pm_runtime_resume_and_get failed: %i\n",
 					__func__, ret);
@@ -324,7 +325,11 @@ int wcd_usbss_set_linearizer_sw_tap(uint32_t aud_tap, uint32_t gnd_tap)
 	if ((!wcd_usbss_ctxt_->regmap) || aud_tap > 0x3FF || gnd_tap > 0x3FF)
 		return -EINVAL;
 
+#if 0 //OPLUS_BUG_COMPATIBILITY
 	ret = pm_runtime_resume_and_get(wcd_usbss_ctxt_->dev);
+#else /* OPLUS_BUG_COMPATIBILITY */
+	ret = wcd_usbss_pm_runtime_resume_and_wait(wcd_usbss_ctxt_->dev);
+#endif /* OPLUS_BUG_COMPATIBILITY */
 	if (ret < 0) {
 		dev_err(wcd_usbss_ctxt_->dev, "%s: pm_runtime_resume_and_get failed: %i\n",
 					__func__, ret);
@@ -388,7 +393,11 @@ int wcd_usbss_register_update(uint32_t reg_arr[][2], bool write, size_t arr_size
 	if (!wcd_usbss_ctxt_->regmap)
 		return -EINVAL;
 
+#if 0 //OPLUS_BUG_COMPATIBILITY
 	rc = pm_runtime_resume_and_get(wcd_usbss_ctxt_->dev);
+#else /* OPLUS_BUG_COMPATIBILITY */
+	rc = wcd_usbss_pm_runtime_resume_and_wait(wcd_usbss_ctxt_->dev);
+#endif /* OPLUS_BUG_COMPATIBILITY */
 	if (rc < 0) {
 		dev_err(wcd_usbss_ctxt_->dev, "%s: pm_runtime_resume_and_get failed: %i\n",
 					__func__, rc);
@@ -452,13 +461,6 @@ static bool wcd_usbss_is_in_reset_state(void)
 		dev_err(wcd_usbss_ctxt_->dev, "%s: pm_runtime_resume_and_get failed: %i\n",
 				__func__, rc);
 		return ret;
-	}
-
-	rc = pm_runtime_resume_and_get(wcd_usbss_ctxt_->dev);
-	if (rc < 0) {
-		dev_err(wcd_usbss_ctxt_->dev, "%s: pm_runtime_resume_and_get failed: %i\n",
-				__func__, rc);
-		goto done;
 	}
 
 	if (!pm_runtime_enabled(i2c_bus_dev)) {
@@ -569,13 +571,6 @@ static int wcd_usbss_reset_routine(void)
 		return ret;
 	}
 
-	ret = pm_runtime_resume_and_get(wcd_usbss_ctxt_->dev);
-	if (ret < 0) {
-		dev_err(wcd_usbss_ctxt_->dev, "%s: pm_runtime_resume_and_get failed: %i\n",
-				__func__, ret);
-		return ret;
-	}
-
 	if (!pm_runtime_enabled(i2c_bus_dev)) {
 #if 0 //OPLUS_BUG_COMPATIBILITY
 		pm_runtime_enable(i2c_bus_dev);
@@ -617,9 +612,6 @@ static int wcd_usbss_reset_routine(void)
 	pm_runtime_mark_last_busy(wcd_usbss_ctxt_->dev);
 	pm_runtime_put_autosuspend(wcd_usbss_ctxt_->dev);
 
-	pm_runtime_mark_last_busy(wcd_usbss_ctxt_->dev);
-	pm_runtime_put_autosuspend(wcd_usbss_ctxt_->dev);
-
 	return 0;
 }
 /* Called with switch_update_lock mutex locked */
@@ -646,7 +638,9 @@ static void wcd_usbss_standby_control_locked(bool enter_standby)
 static int wcd_usbss_standby_control(bool enter_standby)
 {
 	struct device *i2c_bus_dev = wcd_usbss_ctxt_->client->adapter->dev.parent;
+#if 0 //OPLUS_BUG_COMPATIBILITY
 	bool disable_rpm = false;
+#endif /* OPLUS_BUG_COMPATIBILITY */
 	int ret = 0;
 
 	if (!wcd_usbss_ctxt_->standby_enable)
@@ -691,9 +685,6 @@ static int wcd_usbss_standby_control(bool enter_standby)
 	if (disable_rpm)
 		pm_runtime_disable(i2c_bus_dev);
 #endif /* OPLUS_BUG_COMPATIBILITY */
-
-	pm_runtime_mark_last_busy(wcd_usbss_ctxt_->dev);
-	pm_runtime_put_autosuspend(wcd_usbss_ctxt_->dev);
 
 	pm_runtime_mark_last_busy(wcd_usbss_ctxt_->dev);
 	pm_runtime_put_autosuspend(wcd_usbss_ctxt_->dev);
@@ -1142,7 +1133,11 @@ int wcd_usbss_dpdm_switch_update(bool sw_en, bool eq_en)
 	if (!wcd_usbss_ctxt_->regmap)
 		return -EINVAL;
 
+#if 0 //OPLUS_BUG_COMPATIBILITY
 	ret = pm_runtime_resume_and_get(wcd_usbss_ctxt_->dev);
+#else /* OPLUS_BUG_COMPATIBILITY */
+	ret = wcd_usbss_pm_runtime_resume_and_wait(wcd_usbss_ctxt_->dev);
+#endif /* OPLUS_BUG_COMPATIBILITY */
 	if (ret < 0) {
 		dev_err(wcd_usbss_ctxt_->dev, "%s: pm_runtime_resume_and_get failed: %i\n",
 				__func__, ret);
@@ -1214,7 +1209,11 @@ int wcd_usbss_audio_config(bool enable, enum wcd_usbss_config_type config_type,
 					       BIT(WCD_USBSS_GND_MIC_SWAP_HSJ))))
 		return 0;
 
+#if 0 //OPLUS_BUG_COMPATIBILITY
 	rc = pm_runtime_resume_and_get(wcd_usbss_ctxt_->dev);
+#else /* OPLUS_BUG_COMPATIBILITY */
+	rc = wcd_usbss_pm_runtime_resume_and_wait(wcd_usbss_ctxt_->dev);
+#endif /* OPLUS_BUG_COMPATIBILITY */
 	if (rc < 0) {
 		dev_err(wcd_usbss_ctxt_->dev, "%s: pm_runtime_resume_and_get failed: %i\n",
 				__func__, rc);
@@ -1308,6 +1307,7 @@ int wcd_usbss_switch_update(enum wcd_usbss_cable_types ctype,
 	if (!wcd_usbss_ctxt_->regmap)
 		return -EINVAL;
 
+#if 0 //OPLUS_BUG_COMPATIBILITY
 	mutex_lock(&wcd_usbss_ctxt_->switch_update_lock);
 
 	pr_info("%s: ctype = %d, connect_status = %d\n",
@@ -1320,6 +1320,20 @@ int wcd_usbss_switch_update(enum wcd_usbss_cable_types ctype,
 		mutex_unlock(&wcd_usbss_ctxt_->switch_update_lock);
 		return ret;
 	}
+#else /* OPLUS_BUG_COMPATIBILITY */
+	pr_info("%s: ctype = %d, connect_status = %d\n",
+		__func__, ctype, connect_status);
+
+	ret = wcd_usbss_pm_runtime_resume_and_wait(wcd_usbss_ctxt_->dev);
+	if (ret < 0) {
+		dev_err(wcd_usbss_ctxt_->dev, "%s: pm_runtime_resume_and_get failed: %i\n",
+				__func__, ret);
+		return ret;
+	}
+
+	mutex_lock(&wcd_usbss_ctxt_->switch_update_lock);
+#endif /* OPLUS_BUG_COMPATIBILITY */
+
 
 	if (connect_status == WCD_USBSS_CABLE_DISCONNECT) {
 		wcd_usbss_ctxt_->cable_status &= ~BIT(ctype);
@@ -1688,7 +1702,11 @@ int wcd_usbss_update_default_trim(void)
 	if (!wcd_usbss_ctxt_->regmap)
 		return -EINVAL;
 
+#if 0 //OPLUS_BUG_COMPATIBILITY
 	ret = pm_runtime_resume_and_get(wcd_usbss_ctxt_->dev);
+#else /* OPLUS_BUG_COMPATIBILITY */
+	ret = wcd_usbss_pm_runtime_resume_and_wait(wcd_usbss_ctxt_->dev);
+#endif /* OPLUS_BUG_COMPATIBILITY */
 	if (ret < 0) {
 		dev_err(wcd_usbss_ctxt_->dev, "%s: pm_runtime_resume_and_get failed: %i\n",
 				__func__, ret);
@@ -1983,16 +2001,6 @@ static int wcd_usbss_probe(struct i2c_client *i2c)
 		mm_fb_audio_kevent_named(OPLUS_AUDIO_EVENTID_HEADSET_DET, MM_FB_KEY_RATELIMIT_5MIN, \
 			"pm_runtime_resume_and_get failed: %i", rc);
 //#endif /*CONFIG_OPLUS_FEATURE_MM_FEEDBACK*/
-		goto err_data;
-	}
-
-	pm_runtime_enable(dev);
-	pm_runtime_use_autosuspend(dev);
-	pm_runtime_set_autosuspend_delay(dev, 600);
-	rc = pm_runtime_resume_and_get(priv->dev);
-	if (rc < 0) {
-		dev_err(wcd_usbss_ctxt_->dev, "%s: pm_runtime_resume_and_get failed: %i\n",
-				__func__, rc);
 		goto err_data;
 	}
 
