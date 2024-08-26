@@ -2765,7 +2765,6 @@ static int anx7625_i2c_probe(struct i2c_client *client)
 		goto free_wq;
 	}
 
-
 	/*
 	 * Registering the i2c devices will retrigger deferred probe, so it
 	 * needs to be done after calls that might return EPROBE_DEFER,

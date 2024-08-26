@@ -363,6 +363,11 @@
   wakeup_source_remove
   wake_up_state
   wq_worker_comm
+  mdmreason_set
+  __traceiter_android_vh_meminfo_proc_show
+  __tracepoint_android_vh_meminfo_proc_show
+  __traceiter_android_vh_tune_scan_type
+  __tracepoint_android_vh_tune_scan_type
   xt_register_match
   xt_unregister_match
   zero_pfn
